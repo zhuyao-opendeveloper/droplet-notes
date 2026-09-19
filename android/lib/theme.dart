@@ -6,6 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models/custom_brush.dart';
 import 'widgets/anim.dart';
 
+/// 开源仓库地址：设置页「关于」与首页 Star 入口共用，改地址只需改这一处。
+const String kRepoUrl = 'https://github.com/zhuyao-opendeveloper/droplet-notes';
+
 enum AppThemeMode { light, dark, eyeCare, system }
 
 enum IconStyle { outlined, filled }
@@ -53,8 +56,11 @@ class AppSettings {
   String ocrScript = 'chinese'; // 文字识别语言：chinese/latin/japanese/korean
   bool palmReject = true; // 手掌防误触：有触控笔按下时忽略手指触摸
   bool magnifier = true; // 书写时显示跟随笔尖的放大窗（缩放窗）
-  bool shapeRecognition = true; // 手绘图形识别：手写笔随手画的直线/圆/方/三角/箭头自动规整
-  bool shapeHoldSnap = true; // 按住吸附：画完后笔尖停留 ~0.5s 才规整（关=抬笔即规整）
+  bool shapeRecognition = true; // 手绘图形识别（只认 直线 / 圆 / 光滑曲线）
+  // 长按吸附：画完**不提笔**停留 ~0.5s 才识别 —— 这是现在唯一的触发方式
+  // （抬笔不再兜底识别，否则随手写个字也会被拉成某个形状）。
+  // 字段保留是为了不破坏旧存档的序列化，运行时恒为 true。
+  bool shapeHoldSnap = true;
   double shapeTolerance = 0.5; // 形状识别宽严 0..1（越大越容易识别成规整图形）
 
   // —— 显示（Notein §3.2 Display）——

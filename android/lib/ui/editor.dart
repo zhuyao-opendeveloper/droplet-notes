@@ -1263,28 +1263,67 @@ class _EditorPageState extends State<EditorPage>
   String _safeName(String s) => s.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
 
   // ---------- 左侧竖排工具盘 ----------
+  /// 常驻工具栏：常用的笔各占一位，其余同类工具收进抽屉（见 [_showToolGroup]）。
+  ///
+  /// 之前 19 个按钮一条排下来，光找工具就要滚半天；现在压到 11 个。
+  static const List<Tool> _mainTools = [
+    Tool.pen,
+    Tool.brush,
+    Tool.highlighter,
+    Tool.smartPen, // 智能钢笔是本作特色笔，给一个常驻位
+    Tool.eraser,
+    Tool.laser,
+    Tool.lasso,
+    Tool.text,
+  ];
+
+  /// 绘图工具：直线 / 矩形 / 椭圆 / 三角 / 箭头 合并成一个抽屉。
+  static const List<Tool> _shapeTools = [
+    Tool.line,
+    Tool.rect,
+    Tool.ellipse,
+    Tool.triangle,
+    Tool.arrow,
+  ];
+
+  /// 不常换的笔：铅笔 / 彩虹 / 矢量 / 胶带。
+  static const List<Tool> _extraTools = [
+    Tool.pencil,
+    Tool.rainbow,
+    Tool.vector,
+    Tool.tape,
+  ];
+
+  /// Fluent 图标对（regular / filled）；没有的走 [_railMatIcon] 用 Material 兜底。
+  static final Map<Tool, (IconData, IconData)> _fluent = {
+    Tool.pen: (FluentIcons.pen_24_regular, FluentIcons.pen_24_filled),
+    Tool.brush: (
+      FluentIcons.paint_brush_24_regular,
+      FluentIcons.paint_brush_24_filled
+    ),
+    Tool.highlighter: (
+      FluentIcons.highlight_24_regular,
+      FluentIcons.highlight_24_filled
+    ),
+    Tool.eraser: (FluentIcons.eraser_24_regular, FluentIcons.eraser_24_filled),
+    Tool.line: (FluentIcons.line_24_regular, FluentIcons.line_24_filled),
+    Tool.rect: (
+      FluentIcons.rectangle_landscape_24_regular,
+      FluentIcons.rectangle_landscape_24_filled
+    ),
+    Tool.ellipse: (FluentIcons.circle_24_regular, FluentIcons.circle_24_filled),
+    Tool.arrow: (
+      FluentIcons.arrow_next_24_regular,
+      FluentIcons.arrow_next_24_filled
+    ),
+  };
+
+  Widget _toolIcon(Tool t) {
+    final e = _fluent[t];
+    return e != null ? flu(e.$1, e.$2) : Icon(_railMatIcon(t));
+  }
+
   Widget _rail([double width = 58]) {
-    final tools = [
-      (Tool.pen, FluentIcons.pen_24_regular, FluentIcons.pen_24_filled),
-      (Tool.brush, FluentIcons.paint_brush_24_regular, FluentIcons.paint_brush_24_filled),
-      (Tool.highlighter, FluentIcons.highlight_24_regular, FluentIcons.highlight_24_filled),
-      (Tool.pencil, null, null), // 铅笔（批次18）
-      (Tool.rainbow, null, null), // 彩虹笔（批次18）
-      (Tool.vector, null, null), // 矢量笔（批次18）
-      (Tool.smartPen, null, null), // 智能钢笔（z_math 变宽笔迹）
-      (Tool.tape, null, null),
-      (Tool.eraser, FluentIcons.eraser_24_regular, FluentIcons.eraser_24_filled),
-      (Tool.laser, null, null),
-      (Tool.line, FluentIcons.line_24_regular, FluentIcons.line_24_filled),
-      (Tool.rect, FluentIcons.rectangle_landscape_24_regular, FluentIcons.rectangle_landscape_24_filled),
-      (Tool.ellipse, FluentIcons.circle_24_regular, FluentIcons.circle_24_filled),
-      // fluentui_system_icons 1.1.1 无三角形图标，用 Material 兜底
-      (Tool.triangle, null, null),
-      (Tool.arrow, FluentIcons.arrow_next_24_regular, FluentIcons.arrow_next_24_filled),
-      (Tool.lasso, null, null),
-      // fluentui_system_icons 1.1.1 里没有 text_24_*，用 Material 图标兜底
-      (Tool.text, null, null),
-    ];
     final isLeft = AppSettings.instance.leftHand;
     return Container(
       width: width,
@@ -1300,28 +1339,136 @@ class _EditorPageState extends State<EditorPage>
       child: SingleChildScrollView(
         child: Column(
           children: [
-            for (final t in tools)
+            for (final t in _mainTools)
               _railBtn(
-                icon: t.$2 != null ? flu(t.$2!, t.$3!) : Icon(_railMatIcon(t.$1)),
-                tooltip: _toolName(t.$1),
-                selected: _tool == t.$1,
-                onTap: () => _selectTool(t.$1),
+                icon: _toolIcon(t),
+                tooltip: _toolName(t),
+                selected: _tool == t,
+                onTap: () => _selectTool(t),
               ),
+            // 五合一：当前选中某个绘图工具时，按钮直接显示该工具的图标，
+            // 不用打开抽屉也能看出正在用哪个。
             _railBtn(
-              icon: const Icon(Icons.image),
-              tooltip: '插入图片',
-              onTap: _addImage,
+              icon: _tool.isShape
+                  ? _toolIcon(_tool)
+                  : const Icon(Icons.category_outlined),
+              tooltip: '绘图工具',
+              selected: _tool.isShape,
+              onTap: () => _showToolGroup('绘图工具', _shapeTools),
             ),
             _railBtn(
-              icon: const Icon(Icons.crop),
-              tooltip: '图片裁剪',
-              onTap: _showImageSheet,
+              icon: _extraTools.contains(_tool)
+                  ? _toolIcon(_tool)
+                  : const Icon(Icons.color_lens_outlined),
+              tooltip: '更多笔',
+              selected: _extraTools.contains(_tool),
+              onTap: () => _showToolGroup('更多笔', _extraTools),
             ),
             _railBtn(
-              // fluentui_system_icons 1.1.1 无 brush_24_*，用 Material 图标
-              icon: const Icon(Icons.brush),
-              tooltip: '我的笔盒（悬浮窗，可拖动）',
-              onTap: _openPenBox,
+              icon: const Icon(Icons.more_horiz),
+              tooltip: '更多',
+              onTap: _showMoreSheet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 工具抽屉：同类工具收进一个按钮，点开再选。
+  void _showToolGroup(String title, List<Tool> group) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 8, top: 4, bottom: 10),
+                child: Text(title, style: Theme.of(ctx).textTheme.titleSmall),
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [for (final t in group) _toolChip(t, ctx)],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _toolChip(Tool t, BuildContext sheetCtx) {
+    final cs = Theme.of(context).colorScheme;
+    final on = _tool == t;
+    final fg = on ? cs.onPrimaryContainer : cs.onSurfaceVariant;
+    return SizedBox(
+      width: 78,
+      child: Material(
+        color: on ? cs.primaryContainer : cs.surfaceVariant.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () {
+            _selectTool(t);
+            Navigator.pop(sheetCtx);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconTheme(
+                    data: IconThemeData(size: 24, color: fg),
+                    child: _toolIcon(t)),
+                const SizedBox(height: 6),
+                Text(_toolName(t),
+                    style: TextStyle(fontSize: 11, color: fg)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 图片 / 裁剪 / 悬浮笔盒：这三项不是工具而是动作，收进「更多」。
+  void _showMoreSheet() {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.image_outlined),
+              title: const Text('插入图片'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _addImage();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.crop),
+              title: const Text('图片裁剪'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showImageSheet();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.brush),
+              title: const Text('悬浮笔盒'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openPenBox();
+              },
             ),
           ],
         ),
@@ -1411,123 +1558,8 @@ class _EditorPageState extends State<EditorPage>
         onPressed: _export,
       ),
     ];
-    if (wide) {
-      return [
-        ...primary,
-        _abtn(
-          icon: SwitchFade(
-            slide: false,
-            child: Icon(
-              _readingMode == 0
-                  ? Icons.article_outlined
-                  : _readingMode == 1
-                      ? Icons.view_agenda
-                      : Icons.view_column,
-              key: ValueKey(_readingMode),
-            ),
-          ),
-          tooltip: '阅读模式（点按进入/退出；长按切双页）',
-          onPressed: _toggleReading,
-          onLongPress: () => setState(() => _readingMode = 2),
-        ),
-        _abtn(
-          icon: const Icon(Icons.grid_on),
-          tooltip: '页面模板',
-          onPressed: _showTemplateMenu,
-        ),
-        _abtn(
-          icon: const Icon(Icons.palette),
-          tooltip: '纸张配色',
-          onPressed: _setPaperColor,
-        ),
-        _abtn(
-          icon: AnimatedRotation(
-            turns: _cur.rotation / 360,
-            duration: AppAnim.normal,
-            curve: AppAnim.curve,
-            child: const Icon(Icons.rotate_right),
-          ),
-          tooltip: '旋转当前页',
-          onPressed: _rotatePage,
-        ),
-        _abtn(
-          icon: const Icon(Icons.delete),
-          tooltip: '删除当前页',
-          onPressed: _note!.pages.length > 1 ? () => _deletePage() : null,
-        ),
-        _abtn(
-          icon: Icon(_panMode ? Icons.pan_tool : Icons.draw),
-          tooltip: _panMode ? '拖动模式（点此回到书写）' : '书写模式（点此切拖动页面）',
-          color: _panMode ? Theme.of(context).colorScheme.primary : null,
-          onPressed: () => setState(() => _panMode = !_panMode),
-        ),
-        _abtn(
-          icon: Icon(_cur.unbounded ? Icons.crop_free : Icons.crop_square),
-          tooltip: _cur.unbounded ? '无边画布（已开）' : '无边画布（页面随写随长）',
-          color: _cur.unbounded ? Theme.of(context).colorScheme.primary : null,
-          onPressed: _toggleUnbounded,
-        ),
-        _abtn(
-          icon: const Icon(Icons.description),
-          tooltip: '导入 Word',
-          onPressed: _importDocx,
-        ),
-        _abtn(
-          icon: const Icon(Icons.zoom_out),
-          tooltip: '缩小',
-          onPressed: () => _zoomBy(1 / 1.25),
-        ),
-        _abtn(
-          icon: const Icon(Icons.zoom_in),
-          tooltip: '放大',
-          onPressed: () => _zoomBy(1.25),
-        ),
-        _abtn(
-          icon: const Icon(Icons.layers),
-          tooltip: '图层',
-          onPressed: _showLayers,
-        ),
-        _abtn(
-          icon: Pulse(
-            enabled: _recording,
-            child: flu(FluentIcons.mic_24_regular, FluentIcons.mic_24_filled),
-          ),
-          tooltip: _recording ? '停止录音' : '录音',
-          color: _recording ? Colors.red : null,
-          onPressed: _toggleRecord,
-        ),
-        if (_note!.audioPath != null)
-          _abtn(
-            icon: flu(FluentIcons.play_24_regular, FluentIcons.play_24_filled),
-            tooltip: '音频回放',
-            onPressed: _playback,
-          ),
-        _abtn(
-          icon: flu(FluentIcons.book_24_regular, FluentIcons.book_24_filled),
-          tooltip: '闪卡',
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => FlashcardPage(widget.noteId)),
-          ),
-        ),
-        if (OcrService.available)
-          _abtn(
-            icon: const Icon(Icons.text_snippet_outlined),
-            tooltip: '识别文字（离线 OCR）',
-            onPressed: _ocr,
-          ),
-        _abtn(
-          icon: const Icon(Icons.format_list_numbered),
-          tooltip: '跳转页面',
-          onPressed: _showJump,
-        ),
-        _abtn(
-          icon: const Icon(Icons.view_module),
-          tooltip: '页面管理',
-          onPressed: _showPageManager,
-        ),
-      ];
-    }
+    // 宽屏也不再内联十几颗按钮：低频操作一律收进「⋯」菜单，
+    // 顶栏只留 撤销 / 重做 / 翻页 / 页码 / 导出 / 更多 六项。
     return [
       ...primary,
       PopupMenuButton<String>(

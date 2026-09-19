@@ -752,6 +752,176 @@ class ShapeRecognizer {
     return out;
   }
 
+  // ============ 手写识别入口：只认 直线 / 圆 / 曲线 ============
+
+  /// 手写笔迹的识别入口：**只输出 直线 / 圆 / 曲线 三类**。
+  ///
+  /// 与 [beautify] 的区别（来自实测反馈：抬笔就识别时，矩形/三角/箭头
+  /// 误判最多，随手写个字也会被判成某个形状 —— 识别错了比不识别更烦人）：
+  ///  - 不再输出 rect / triangle / arrow，这三类一律按「曲线平滑」处理；
+  ///  - curve 不再原样返回，而是**去噪 + 光滑**后的曲线：用户画得再抖，
+  ///    落笔也是一条干净的曲线。
+  ///
+  /// 何时识别由画布决定（不提笔长按才触发，抬笔不兜底），这里只管识别本身。
+  static RecognizedShape beautifySimple(
+    List<Point> raw, {
+    double tolerance = 0.5,
+  }) {
+    if (raw.length < 4) return RecognizedShape(ShapeKind.curve, raw, 0);
+    final r = recognize(raw, tolerance: tolerance);
+    final pts = _resample(raw, 48);
+    switch (r.kind) {
+      case ShapeKind.line:
+        return _beautifyLine(pts);
+      case ShapeKind.ellipse:
+        return _asCircle(_beautifyEllipse(pts));
+      case ShapeKind.rect:
+      case ShapeKind.triangle:
+      case ShapeKind.arrow:
+      case ShapeKind.curve:
+        return _smoothCurve(raw);
+    }
+  }
+
+  /// 圆统一规整成**正圆**：用户要的是「圆」，不是任意长短轴的椭圆。
+  static RecognizedShape _asCircle(RecognizedShape e) {
+    if (e.points.length < 2) return e;
+    final a = e.points.first;
+    final b = e.points.last;
+    final cx = (a.x + b.x) / 2;
+    final cy = (a.y + b.y) / 2;
+    final r = ((b.x - a.x).abs() + (b.y - a.y).abs()) / 4;
+    return RecognizedShape(
+      ShapeKind.ellipse,
+      [Point(cx - r, cy - r), Point(cx + r, cy + r)],
+      1,
+    );
+  }
+
+  /// 粗糙手绘 → **光滑无噪点**的曲线。
+  ///
+  /// 三步，顺序不能换：
+  ///  1) RDP 简化：先抽掉抖动产生的冗余点、**保留真正的拐点**。
+  ///     跳过这步直接平滑，方角会被磨成圆角，形状整个走样。
+  ///  2) Chaikin 细分：把折线磨成圆滑曲线。两次足够 —— 每次细分都会让
+  ///     曲线向内收缩，做多了形状肉眼可见地缩水。
+  ///  3) 三点移动平均：清掉 Chaikin 之后残留的高频噪点。
+  static RecognizedShape _smoothCurve(List<Point> raw) {
+    if (raw.length < 4) return RecognizedShape(ShapeKind.curve, raw, 0);
+    final bb = _bbox(_toOffsets(raw));
+    final diag = math.sqrt(bb.width * bb.width + bb.height * bb.height);
+    // 简化容差取对角线的 1.2%：太小挡不住抖动，太大把真拐点也删了
+    final eps = (diag * 0.012).clamp(1.0, 12.0).toDouble();
+    var pts = _rdp(_toOffsets(raw), eps);
+    if (pts.length < 3) pts = _toOffsets(raw);
+    for (var i = 0; i < 2; i++) {
+      pts = _chaikin(pts);
+    }
+    pts = _movingAvg(pts, 2);
+    return RecognizedShape(ShapeKind.curve, _withPressure(pts, raw), 0);
+  }
+
+  /// Ramer–Douglas–Peucker 简化（迭代版，避免深笔画递归爆栈）。
+  static List<Offset> _rdp(List<Offset> pts, double eps) {
+    if (pts.length < 3) return List<Offset>.from(pts);
+    final keep = List<bool>.filled(pts.length, false);
+    keep[0] = true;
+    keep[pts.length - 1] = true;
+    final stack = <List<int>>[
+      [0, pts.length - 1]
+    ];
+    while (stack.isNotEmpty) {
+      final seg = stack.removeLast();
+      if (seg[1] - seg[0] < 2) continue;
+      var maxD = -1.0;
+      var idx = -1;
+      for (var i = seg[0] + 1; i < seg[1]; i++) {
+        final d = _perpDist(pts[i], pts[seg[0]], pts[seg[1]]);
+        if (d > maxD) {
+          maxD = d;
+          idx = i;
+        }
+      }
+      if (maxD > eps && idx > 0) {
+        keep[idx] = true;
+        stack.add([seg[0], idx]);
+        stack.add([idx, seg[1]]);
+      }
+    }
+    final out = <Offset>[];
+    for (var i = 0; i < pts.length; i++) {
+      if (keep[i]) out.add(pts[i]);
+    }
+    return out;
+  }
+
+  static double _perpDist(Offset p, Offset a, Offset b) {
+    final dx = b.dx - a.dx;
+    final dy = b.dy - a.dy;
+    final l2 = dx * dx + dy * dy;
+    if (l2 <= 0) return (p - a).distance;
+    final t = (((p.dx - a.dx) * dx + (p.dy - a.dy) * dy) / l2)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    return (p - Offset(a.dx + t * dx, a.dy + t * dy)).distance;
+  }
+
+  /// Chaikin 切角：每段按 1:3 / 3:1 取两点，折线 → 圆滑曲线。
+  static List<Offset> _chaikin(List<Offset> pts) {
+    if (pts.length < 3) return List<Offset>.from(pts);
+    final out = <Offset>[pts.first];
+    for (var i = 0; i < pts.length - 1; i++) {
+      final a = pts[i];
+      final b = pts[i + 1];
+      out.add(Offset(a.dx * 0.75 + b.dx * 0.25, a.dy * 0.75 + b.dy * 0.25));
+      out.add(Offset(a.dx * 0.25 + b.dx * 0.75, a.dy * 0.25 + b.dy * 0.75));
+    }
+    out.add(pts.last);
+    return out;
+  }
+
+  /// 三点加权移动平均（1-2-1 权重），首尾点保持不动以留住起笔收笔位置。
+  static List<Offset> _movingAvg(List<Offset> pts, int times) {
+    var cur = pts;
+    for (var t = 0; t < times; t++) {
+      if (cur.length < 3) return cur;
+      final out = <Offset>[cur.first];
+      for (var i = 1; i < cur.length - 1; i++) {
+        out.add(Offset(
+          (cur[i - 1].dx + cur[i].dx * 2 + cur[i + 1].dx) / 4,
+          (cur[i - 1].dy + cur[i].dy * 2 + cur[i + 1].dy) / 4,
+        ));
+      }
+      out.add(cur.last);
+      cur = out;
+    }
+    return cur;
+  }
+
+  /// 平滑后只剩坐标，压感要从原始点里按最近邻取回 ——
+  /// 否则整条曲线变成恒定 0.5，笔锋全丢。
+  static List<Point> _withPressure(List<Offset> pts, List<Point> raw) {
+    final out = <Point>[];
+    for (final p in pts) {
+      var best = 0;
+      var bd = double.infinity;
+      for (var i = 0; i < raw.length; i++) {
+        final dx = raw[i].x - p.dx;
+        final dy = raw[i].y - p.dy;
+        final d = dx * dx + dy * dy;
+        if (d < bd) {
+          bd = d;
+          best = i;
+        }
+      }
+      out.add(Point(p.dx, p.dy, raw[best].pressure));
+    }
+    return out;
+  }
+
+  static List<Offset> _toOffsets(List<Point> pts) =>
+      [for (final p in pts) Offset(p.x, p.y)];
+
 }
 
 class _RotRect {

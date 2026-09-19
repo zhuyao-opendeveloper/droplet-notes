@@ -150,6 +150,10 @@ class _HandwritingCanvasState extends State<HandwritingCanvas> {
   RecognizedShape? _snap; // 已吸附的规整形状（非 null = 当前笔画处于吸附态，预览用规整几何）
   Timer? _holdTimer; // 按住吸附计时器（shapeToolRequireHoldToSnap）
   Offset _lastMove = Offset.zero; // 上一次采样点，用于判断吸附后是否继续移动
+  // 吸附态「拖动修改」的节流基准：手指每移动一段距离且间隔够久才重跑一次识别，
+  // 否则每个 move 事件都跑一遍会让长笔画越拖越卡。
+  Offset _snapLastAt = Offset.zero;
+  DateTime _snapLastTime = DateTime.now();
 
   // ---- 多指手势：区分「多指轻点(撤销/重做)」与「捏合缩放/平移」----
   final Map<int, Offset> _ptrPos = {};
@@ -180,26 +184,32 @@ class _HandwritingCanvasState extends State<HandwritingCanvas> {
       widget.tool.isPenLike &&
       !widget.tool.isLaser; // 激光笔不落笔，不参与识别
 
-  /// 对当前笔画做一次「识别 + 美化」，成功返回规整形状，否则返回 null。
+  /// 对当前笔画做一次「识别 + 美化」。
+  ///
+  /// 只认 **直线 / 圆 / 曲线** 三类（see [ShapeRecognizer.beautifySimple]）：
+  /// curve 也会被返回，但内容是**平滑去噪**后的曲线，不是原始手绘点。
   RecognizedShape? _tryRecognize(List<Point> pts) {
     if (!_recogEnabled || pts.length < 8) return null;
-    final r = ShapeRecognizer.beautify(
+    return ShapeRecognizer.beautifySimple(
       pts,
       tolerance: AppSettings.instance.shapeTolerance,
     );
-    return r.isGeometry ? r : null;
   }
 
-  /// 按住吸附：笔尖停留 _holdMs 不动即规整（GoodNotes shapeToolRequireHoldToSnap）。
+  /// 长按吸附：**不提笔**停留 _holdMs 才触发识别（唯一触发路径）。
+  ///
+  /// 抬笔时不再兜底识别 —— 之前抬笔无条件再识别一次，于是随手写个字
+  /// 也会被拉成某个形状，这是"写什么都乱识别"的根因。
   void _scheduleHoldSnap() {
     _holdTimer?.cancel();
     if (!_recogEnabled) return;
-    if (!AppSettings.instance.shapeHoldSnap) return;
-    if (_snap != null) return; // 已吸附，不再重复
+    if (_snap != null) return; // 已吸附，交给 _onMove 持续调整
     _holdTimer = Timer(const Duration(milliseconds: 520), () {
       if (!mounted || _current.isEmpty) return;
       final r = _tryRecognize(_current);
       if (r == null) return;
+      _snapLastAt = Offset.zero; // 进入吸附态，重置调整节流基准
+      _snapLastTime = DateTime.now();
       setState(() => _snap = r);
     });
   }
@@ -757,14 +767,24 @@ class _HandwritingCanvasState extends State<HandwritingCanvas> {
       return;
     }
     if (_current.isEmpty) return;
-    // 吸附后继续移动 ⇒ 取消吸附，恢复自由手绘（留 6px 抖动余量）
-    if (_snap != null && (p - _lastMove).distance > 6) {
-      _snap = null;
-    }
     _lastMove = p;
     _current.add(Point(p.dx, p.dy, _pressFor(e)));
     if (widget.tool.isShape) _applyShapeSnapping();
-    _scheduleHoldSnap();
+    if (_snap != null) {
+      // 吸附态：手指不提笔继续拖 = **调整形状**。把新点并进笔画再识别一次，
+      // 形状就跟着手指走；抬笔时才最终落定（见 _onUp）。
+      // 节流：距离 >10px 且距上次 >60ms 才重算，避免每帧全量识别拖垮帧率。
+      final now = DateTime.now();
+      if ((p - _snapLastAt).distance > 10 &&
+          now.difference(_snapLastTime).inMilliseconds > 60) {
+        final r = _tryRecognize(_current);
+        if (r != null) _snap = r;
+        _snapLastAt = p;
+        _snapLastTime = now;
+      }
+    } else {
+      _scheduleHoldSnap();
+    }
     setState(() {});
   }
 
@@ -920,15 +940,18 @@ class _HandwritingCanvasState extends State<HandwritingCanvas> {
       });
       return;
     }
-    // 形状落定：优先取按住吸附的结果；否则抬笔时再识别一次。
+    // 形状落定：**只用长按产生的吸附结果**，抬笔不再兜底识别。
     //
-    // 注意：原先写成 `_snap ?? (shapeHoldSnap ? null : _tryRecognize(...))`，
-    // 导致开启「按住吸附」后，用户画完直接抬笔（未停留 0.5s）时完全不识别 ——
-    // 这是"手绘图形识别像没这功能"的根因。现在两种模式都会兜底识别：
-    // 按住吸附只作为「拖拽途中的预览」，抬笔时始终给出最终结果。
-    final snap = _snap ?? _tryRecognize(_current);
+    // 之前写成 `_snap ?? _tryRecognize(_current)` —— 抬笔时无条件再识别一次，
+    // 于是随手写的字、随手画的草图全被拉成某个形状（"写什么都乱识别"）。
+    // 现在的规则：画完不提笔、长按 0.5s 才识别；识别后手指可以继续拖动
+    // 调整（_onMove 里持续重识别），抬笔即吸附落定。
+    final snap = _snap;
     _clearSnap();
-    final tool = snap != null ? Tool.fromShapeKind(snap.kind.name) : widget.tool;
+    // curve 表示「只是把粗糙手绘平滑了」，仍用原笔型绘制，不能转成 pen 之外的形状工具
+    final isCurve = snap != null && snap.kind == ShapeKind.curve;
+    final tool =
+        (snap != null && !isCurve) ? Tool.fromShapeKind(snap.kind.name) : widget.tool;
     // 形状工具拖拽存的是原始采样点，必须规整成几何控制点，
     // 否则 _shapePath 取前几个点连出退化的小多边形（矩形/三角形画不出来）。
     // 识别器的 snap.points 已是规整控制点，不可二次规整。
@@ -1287,9 +1310,11 @@ class _HandwritingCanvasState extends State<HandwritingCanvas> {
           _imgMap,
           widget.paperColor,
           widget.interactive,
-          // 吸附态：预览用规整几何 + 对应形状工具绘制
-          currentTool:
-              _snap != null ? Tool.fromShapeKind(_snap!.kind.name) : null,
+          // 吸附态：预览用规整几何 + 对应形状工具绘制。
+          // curve 只是平滑过的手绘，仍按当前笔型画，不能套形状工具。
+          currentTool: (_snap != null && _snap!.kind != ShapeKind.curve)
+              ? Tool.fromShapeKind(_snap!.kind.name)
+              : null,
           scene: _scene,
           selRect: (_rectStart == null || _rectEnd == null)
               ? null

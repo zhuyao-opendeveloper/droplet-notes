@@ -1,5 +1,6 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Clipboard：复制仓库地址
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 
 import '../data/folders.dart';
@@ -326,6 +327,43 @@ class _HomePageState extends State<HomePage> {
     await _store.deleteNote(n.id);
     await OcrIndex.removeNote(n.id);
     await _refresh();
+  }
+
+  /// 开源仓库 + 求 Star。
+  ///
+  /// 本作免费、无广告、不联网、不收集任何数据；没有付费墙也没有遥测，
+  /// 唯一能支持它继续更新下去的就是仓库的 Star。
+  Future<void> _showRepoDialog() async {
+    await showDialog(
+      context: context,
+      builder: (d) => AlertDialog(
+        title: const Text('Hydro Note 完全开源'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('免费、无广告、不联网、不收集任何数据。'),
+            SizedBox(height: 10),
+            Text('如果它对你有用，欢迎到仓库点个 Star —— 这是它继续更新下去的唯一动力。'),
+            SizedBox(height: 12),
+            SelectableText(kRepoUrl, style: TextStyle(fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(d), child: const Text('知道了')),
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(const ClipboardData(text: kRepoUrl));
+              if (!mounted) return;
+              Navigator.pop(d);
+              _toast('仓库地址已复制');
+            },
+            child: const Text('复制地址'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _emptyTrash() async {
@@ -1155,6 +1193,13 @@ class _HomePageState extends State<HomePage> {
                     tooltip: L.tr(context, 'settings'),
                     onPressed: () => Navigator.pushNamed(context, '/settings')
                         .then((_) => setState(() {})),
+                  ),
+                ),
+                PressScale(
+                  child: IconButton(
+                    icon: const Icon(Icons.star_border),
+                    tooltip: '给个 Star',
+                    onPressed: _showRepoDialog,
                   ),
                 ),
               ],

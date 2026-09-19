@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Clipboard：复制仓库地址
 import 'package:fluentui_system_icons/fluentui_system_icons.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -483,7 +484,13 @@ class _SettingsDetailPageState extends State<SettingsDetailPage> {
               s.toolCollection = v;
               s.save();
             })),
-            _switch(L.tr(ctx, 'one_stroke_shape'), '', s.shapeRecognition,
+            _switch(
+              L.tr(ctx, 'one_stroke_shape'),
+              // 新规则：抬笔不再自动识别，必须画完不提笔、停留约 0.5 秒才触发。
+              // 只认 直线 / 圆 / 光滑曲线 三类，识别后可继续拖动调整，抬笔吸附。
+              '画完不提笔、停留约 0.5 秒才识别（仅直线 / 圆 / 光滑曲线），'
+              '识别后可继续拖着改，抬笔才最终吸附',
+              s.shapeRecognition,
                 (v) => setState(() {
               s.shapeRecognition = v;
               s.save();
@@ -805,6 +812,27 @@ class _SettingsDetailPageState extends State<SettingsDetailPage> {
             const ListTile(
               title: Text('Hydro Note'),
               subtitle: Text('离线手写笔记 · 版本 0.1.0'),
+            ),
+            // 开源地址 + 求 Star：本作免费无广告、不联网、不收集任何数据，
+            // 唯一能支持它继续做下去的方式就是给仓库点个 Star。
+            ListTile(
+              leading: const Icon(Icons.code),
+              title: const Text('开源仓库'),
+              subtitle: const Text(kRepoUrl),
+              trailing: const Icon(Icons.copy),
+              onTap: () async {
+                await Clipboard.setData(const ClipboardData(text: kRepoUrl));
+                if (!mounted) return;
+                _toast('仓库地址已复制，粘到浏览器打开就能看到源码');
+              },
+            ),
+            const ListTile(
+              leading: Icon(Icons.star_border),
+              title: Text('喜欢的话，给个 Star ⭐'),
+              subtitle: Text(
+                '完全开源、免费、无广告、不联网、不收集任何数据。\n'
+                '你的 Star 是它继续更新下去的唯一动力。',
+              ),
             ),
             ListTile(
               leading: const Icon(Icons.article_outlined),
