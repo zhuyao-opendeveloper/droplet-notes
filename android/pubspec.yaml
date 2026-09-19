@@ -1,0 +1,46 @@
+name: hydronotes
+description: Hydro Note - 离线 PDF 手写笔记（纯 Flutter + Fluent 图标）
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  perfect_freehand: ^2.5.2
+  pdfx: ^2.6.0
+  printing: ^5.11.0
+  pdf: ^3.11.1
+  fluentui_system_icons: ^1.1.1
+  path_provider: ^2.1.0
+  shared_preferences: ^2.2.0
+  wakelock_plus: ^1.2.0
+  file_selector: ^1.0.0
+  uuid: ^4.0.0
+  archive: ^3.0.0
+  # record 5.x 的桌面端实现（record_linux 0.7.x）与 Flutter 3.22 的插件接口不匹配，
+  # 会在 kernel_snapshot 阶段报 "missing implementations"，故固定在 4.x
+  # （Recorder 类名在 4.x 为 Record，stop/start/hasPermission/dispose 都在）
+  record: ^4.4.4
+  audioplayers: ^5.2.0
+  # 图片转码：Flutter 3.22 的 ui.ImageByteFormat 只有 png / rawRgba，
+  # 导出 JPG 需要先把光栅化结果取 PNG 再离线转码。
+  # 注意锁 <4.4.0：image 4.4.0 起依赖 archive 4.x，会和这里的 archive ^3 冲突。
+  image: '>=4.0.0 <4.4.0'
+  # 离线文字识别（ML Kit Text Recognition v2，bundled 模型随 APK 打包，
+  # 运行时不联网、不依赖 Google Play 服务；Apache License 2.0，可免费商用）
+  google_mlkit_text_recognition: ^0.13.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/

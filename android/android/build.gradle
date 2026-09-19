@@ -1,0 +1,48 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// 兼容老插件：AGP 8 要求每个 Android 模块在 build.gradle 里声明 namespace，
+// 但部分老版本插件（如 record 4.x 的 android 模块）仍只在 AndroidManifest.xml
+// 里写 package，会在 configure 阶段报
+// "Namespace not specified. Specify a namespace in the module's build file"。
+// 这里统一给「没有 namespace 的库模块」补一个，避免逐个改插件源码。
+subprojects {
+    afterEvaluate { project ->
+        if (!project.hasProperty('android')) return
+
+        // 1) 补 namespace
+        def androidExt = project.extensions.findByName('android')
+        if (androidExt != null) {
+            try {
+                if (androidExt.namespace == null) {
+                    androidExt.namespace = "com.${project.name.replace('-', '_')}"
+                }
+            } catch (Exception ignored) {
+                // 某些模块没有 namespace 属性，忽略即可
+            }
+        }
+
+        // 2) 抹掉第三方老插件 manifest 里的 package="..."
+        //    （AGP 8 起不再支持用 manifest 的 package 属性指定 namespace，
+        //     record 4.x 的 android 模块仍带着，会在 processReleaseManifest 报错。
+        //     只处理非 app 模块，避免动到自己的配置；CI 每次全新 pub-cache，
+        //     改动不会累积。）
+        if (project.name == 'app') return
+        try {
+            def manifestFile = project.android.sourceSets.main.manifest.srcFile
+            if (manifestFile != null && manifestFile.exists()) {
+                def text = manifestFile.getText('UTF-8')
+                if (text.contains('package="')) {
+                    manifestFile.write(text.replaceAll('package="[^"]*"', ''), 'UTF-8')
+                    println("[compat] removed manifest package attr in ${project.name}")
+                }
+            }
+        } catch (Exception e) {
+            println("[compat] manifest patch skipped for ${project.name}: ${e.message}")
+        }
+    }
+}

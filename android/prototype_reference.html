@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hydro Notes - 手写原型</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: system-ui, sans-serif; background: #eef1f6; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #232a3d; color: #fff; padding: 10px 16px; display: flex; align-items: center; gap: 12px; font-size: 15px; }
+  header .title { font-weight: 700; letter-spacing: .5px; }
+  header .dot { width: 10px; height: 10px; border-radius: 50%; background: #38bdf8; }
+  .toolbar { display: flex; gap: 8px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e2e6ee; flex-wrap: wrap; }
+  .tool-group { display: flex; gap: 6px; align-items: center; margin-right: 8px; }
+  .btn { padding: 7px 14px; border: 1px solid #cfd6e4; border-radius: 8px; background: #fff; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: #f2f5fb; }
+  .btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  label { font-size: 12px; color: #555; }
+  input[type=range] { width: 90px; }
+  input[type=color] { width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; padding: 0; }
+  .canvas-wrap { flex: 1; position: relative; margin: 14px; border-radius: 10px; overflow: hidden; box-shadow: 0 6px 20px rgba(30,50,90,.12); background: #fff; }
+  canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  #status { font-size: 12px; color: #888; padding: 0 12px; }
+  footer { padding: 8px 16px; font-size: 12px; color: #99a; background: #fff; border-top: 1px solid #e2e6ee; }
+  .tip { margin-left: auto; font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <span class="title">Hydro Notes — 手写引擎原型</span>
+  <span id="status">笔迹: 0</span>
+  <span class="tip">✍️ 压感: 鼠标拖动时越快笔越细（速度模拟笔宽）</span>
+</header>
+
+<div class="toolbar">
+  <div class="tool-group">
+    <button class="btn active" data-mode="pen">🖊 笔</button>
+    <button class="btn" data-mode="highlighter">🟡 荧光笔</button>
+    <button class="btn" data-mode="eraser">🧽 橡皮(笔画)</button>
+    <button class="btn" data-mode="lasso">🔲 套索</button>
+  </div>
+  <div class="tool-group">
+    <input type="color" id="color" value="#1e293b" title="颜色">
+    <label>粗细 <input type="range" id="size" min="1" max="20" value="4"></label>
+  </div>
+  <div class="tool-group">
+    <button class="btn" id="undo">↩ 撤销</button>
+    <button class="btn" id="clear">🗑 清空</button>
+    <button class="btn" id="export">⬇ 导出PNG</button>
+  </div>
+</div>
+
+<div class="canvas-wrap"><canvas id="cv"></canvas></div>
+<footer>算法参考：Chaikin 平滑 + 速度模拟笔宽 + AABB 命中测试。空白处拖动书写，套索框住后自动选中。</footer>
+
+<script>
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+function resize(){ const r=cv.parentElement.getBoundingClientRect(); cv.width=r.width*devicePixelRatio; cv.height=r.height*devicePixelRatio; }
+window.addEventListener('resize', resize); resize();
+
+let bg; // 缓存背景
+function paintBg(){ bg=document.createElement('canvas'); bg.width=cv.width; bg.height=cv.height; let c=bg.getContext('2d');
+  c.fillStyle='#ffffff'; c.fillRect(0,0,bg.width,bg.height);
+  c.strokeStyle='#eef2f8'; c.lineWidth=1;
+  const step=28*devicePixelRatio;
+  for(let x=0;x<bg.width;x+=step){c.beginPath();c.moveTo(x,0);c.lineTo(x,bg.height);c.stroke();}
+  for(let y=0;y<bg.height;y+=step){c.beginPath();c.moveTo(0,y);c.lineTo(bg.width,y);c.stroke();}
+}
+paintBg();
+
+// ---------- 数据模型 ----------
+let strokes = [];   // 每笔 = {points:[{x,y,p}], color, size, mode, bounds}
+let history = [];   // 撤销栈
+let mode = 'pen';
+const sub = 9;      // 细分步数
+
+function downsample(pts){ // 均匀降采样，减少冗余点
+  if(pts.length<3) return pts;
+  const out=[pts[0]]; let acc=0;
+  for(let i=1;i<pts.length-1;i++){
+    const dx=pts[i].x-pts[i-1].x, dy=pts[i].y-pts[i-1].y;
+    acc+=Math.hypot(dx,dy);
+    if(acc>=2){ out.push(pts[i]); acc=0; }
+  }
+  out.push(pts[pts.length-1]); return out;
+}
+
+function chaikin(pts, iters=1){
+  if(pts.length<3) return pts;
+  let p=pts;
+  for(let n=0;n<iters;n++){
+    const out=[p[0]];
+    for(let i=0;i<p.length-1;i++){
+      const a=p[i], b=p[i+1];
+      out.push({x:a.x*0.75+b.x*0.25, y:a.y*0.75+b.y*0.25});
+      out.push({x:a.x*0.25+b.x*0.75, y:a.y*0.25+b.y*0.75});
+    }
+    out.push(p[p.length-1]); p=out;
+  }
+  return p;
+}
+
+function strokePath(st, ctx2){
+  const sm=chaikin(downsample(st.points), 1);
+  ctx2.beginPath();
+  ctx2.moveTo(sm[0].x, sm[0].y);
+  for(let i=1;i<sm.length-1;i++){ // Catmull-Rom → Bezier 平滑过点
+    const p0=sm[i-1],p1=sm[i],p2=sm[i+1];
+    const c1x=p1.x+(p2.x-p0.x)/6, c1y=p1.y+(p2.y-p0.y)/6;
+    const c2x=p1.x-(p2.x-p0.x)/6, c2y=p1.y-(p2.y-p0.y)/6;
+    ctx2.bezierCurveTo(c1x,c1y,c2x,c2y,p2.x,p2.y);
+  }
+  ctx2.moveTo(sm[sm.length-1].x, sm[sm.length-1].y);
+}
+
+function renderStroke(st, ctx2, forFilter=false){
+  if(st.mode==='eraser') return;
+  const col=st.color;
+  ctx2.globalAlpha = st.mode==='highlighter' ? 0.4 : st.size>12 ? 0.8 : 1;
+  // 半透明荧光笔用整条 alpha；实线笔直接画贝塞尔
+  strokePath(st, ctx2);
+  ctx2.lineCap='round'; ctx2.lineJoin='round';
+  ctx2.strokeStyle=col;
+  if(st.mode==='highlighter' && !forFilter){
+    // 荧光笔：整条一次性描边，模拟真实马克笔
+    ctx2.lineWidth=st.size;
+    ctx2.stroke();
+  } else {
+    ctx2.lineWidth=st.size;
+    ctx2.stroke();
+  }
+  ctx2.globalAlpha=1;
+}
+
+function renderAll(){
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.scale(1/devicePixelRatio,1/devicePixelRatio); // 保持逻辑坐标
+  ctx.drawImage(bg,0,0,window.innerWidth>0?cv.width:cv.width,cv.height);
+  for(const st of strokes) renderStroke(st, ctx);
+}
+
+// ---------- 实时手写（动态笔宽，速度模拟） ----------
+let cur=null, lastPt=null, lastT=0, lastSpeed=0;
+
+function pt(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top, p:1}; }
+
+function speedWidth(speed){
+  const base=+size.value;
+  // 慢→粗，快→细；clamp
+  return Math.max(0.5, Math.min(base*1.6, base*Math.max(0.2, 1.4 - speed/6)));
+}
+
+cv.addEventListener('pointerdown', e=>{
+  if(e.pointerType==='mouse' && e.button!==0) return;
+  cv.setPointerCapture(e.pointerId);
+  const p=pt(e);
+  cur={points:[p,p], color:colorInput.value, size:+size.value, mode,
+       bounds:{x1:p.x,y1:p.y,x2:p.x,y2:p.y}};
+  lastPt=p; lastT=performance.now(); lastSpeed=0;
+  if(mode==='lasso'){ /*套索在move里处理*/ }
+});
+
+cv.addEventListener('pointermove', e=>{
+  if(!cur) return;
+  const p=pt(e);
+  if(mode==='lasso'){
+    cur.points.push(p);
+    renderAll();
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    ctx.scale(1/devicePixelRatio,1/devicePixelRatio);
+    ctx.strokeStyle='#2563eb'; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+    ctx.beginPath(); ctx.moveTo(cur.points[0].x,cur.points[0].y);
+    for(let i=1;i<cur.points.length;i++) ctx.lineTo(cur.points[i].x,cur.points[i].y);
+    ctx.stroke(); ctx.setLineDash([]);
+    return;
+  }
+  const now=performance.now(), dt=Math.max(1,now-lastT);
+  const sp=Math.hypot(p.x-lastPt.x,p.y-lastPt.y)/dt*8;
+  lastSpeed=sp*0.6+lastSpeed*0.4;
+  cur.points.push({...p, p: Math.max(0.05, Math.min(1, 1 - lastSpeed/18))});
+  cur.bounds.x1=Math.min(cur.bounds.x1,p.x); cur.bounds.y1=Math.min(cur.bounds.y1,p.y);
+  cur.bounds.x2=Math.max(cur.bounds.x2,p.x); cur.bounds.y2=Math.max(cur.bounds.y2,p.y);
+  lastPt=p; lastT=now;
+  // 实时绘制：重画这一笔
+  renderAll();
+  drawLive(cur);
+});
+
+function drawLive(st){
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+  ctx.scale(1/devicePixelRatio,1/devicePixelRatio);
+  // 按段动态描边（每段用本段速度定宽）
+  const pts=cur.points; if(pts.length<2) return;
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i];
+    const w1=speedFrom(i-1), w2=speedFrom(i);
+    // 速度→笔宽
+    ctx.strokeStyle=cur.color;
+    ctx.globalAlpha = cur.mode==='highlighter'?0.4:1;
+    ctx.lineWidth=Math.max(0.5,(w1+w2)/2);
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+}
+function speedFrom(i){
+  const pts=cur.points, base=+size.value;
+  // 用相邻两点距离近似速度
+  let sp=0; if(i>0){ sp=Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y); }
+  if(i<pts.length-1){ sp=Math.max(sp, Math.hypot(pts[i+1].x-pts[i].x,pts[i+1].y-pts[i].y)); }
+  return Math.max(0.5, Math.min(base*1.6, base*Math.max(0.2,1.4-sp/6)));
+}
+
+cv.addEventListener('pointerup', e=>{
+  if(!cur) return;
+  cur.points=downsample(cur.points);
+  if(cur.points.length>=2){
+    if(mode==='lasso'){ doLasso(cur.points); }
+    else if(mode==='eraser'){ doEraser(cur.points, +size.value*2); }
+    else { strokes.push(cur); }
+    history.push(cur); // 撤销栈
+    updateStatus();
+  }
+  cur=null; lastPt=null;
+});
+
+// ---------- 套索：AABB 粗筛 + 多边形包含精判 ----------
+function doLasso(poly){
+  const bx={x1:1e9,y1:1e9,x2:-1e9,y2:-1e9};
+  for(const p of poly){ bx.x1=Math.min(bx.x1,p.x); bx.y1=Math.min(bx.y1,p.y); bx.x2=Math.max(bx.x2,p.x); bx.y2=Math.max(bx.y2,p.y); }
+  const inPoly=(px,py)=>{
+    let inside=false;
+    for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+      const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+      if(((yi>py)!=(yj>py)) && px<(xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+    }
+    return inside;
+  };
+  let hit=0;
+  for(const st of strokes){
+    if(st.mode==='eraser') continue;
+    // 粗筛 AABB
+    if(st.bounds.x2<bx.x1||st.bounds.x1>bx.x2||st.bounds.y2<bx.y1||st.bounds.y1>bx.y2) continue;
+    // 精判：笔迹中点是否在套索多边形内
+    let sel=false;
+    for(const p of st.points){ if(inPoly(p.x,p.y)){ sel=true; break; } }
+    if(sel){ hit++; /* 高亮选中 */ }
+  }
+  alert(`套索命中 ${hit} 条笔迹（AABB粗筛+多边形精判）`);
+  renderAll();
+}
+
+// ---------- 橡皮擦：笔画擦除（AABB粗筛→距离判定删点） ----------
+function doEraser(poly, radius){
+  const bx={x1:1e9,y1:1e9,x2:-1e9,y2:-1e9};
+  for(const p of poly){ bx.x1=Math.min(bx.x1,p.x); bx.y1=Math.min(bx.y1,p.y); bx.x2=Math.max(bx.x2,p.x); bx.y2=Math.max(bx.y2,p.y); }
+  let erased=0;
+  strokes=strokes.filter(st=>{
+    if(st.mode==='eraser') return true;
+    if(st.bounds.x2<bx.x1||st.bounds.x1>bx.x2||st.bounds.y2<bx.y1||st.bounds.y1>bx.y2) return true;
+    // 留下距离擦除路径>radius 的点
+    const keep=st.points.filter(p=>{
+      for(const ep of poly){ if(Math.hypot(p.x-ep.x,p.y-ep.y)<=radius) return false; }
+      return true;
+    });
+    if(keep.length===st.points.length) return true;
+    if(keep.length>=2){ st.points=keep; updateBounds(st); erased++; return true; }
+    erased++; return false;
+  });
+  if(erased) alert(`已擦除 ${erased} 段笔画`);
+  renderAll(); updateStatus();
+}
+function updateBounds(st){
+  st.bounds={x1:1e9,y1:1e9,x2:-1e9,y2:-1e9};
+  for(const p of st.points){ st.bounds.x1=Math.min(st.bounds.x1,p.x); st.bounds.y1=Math.min(st.bounds.y1,p.y); st.bounds.x2=Math.max(st.bounds.x2,p.x); st.bounds.y2=Math.max(st.bounds.y2,p.y); }
+}
+// ---------- 工具栏 ----------
+const colorInput=document.getElementById('color');
+const size=document.getElementById('size');
+document.querySelectorAll('[data-mode]').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('[data-mode]').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); mode=b.dataset.mode;
+  });
+});
+document.getElementById('undo').onclick=()=>{
+  if(strokes.length){ strokes.pop(); history.pop(); renderAll(); updateStatus(); }
+};
+document.getElementById('clear').onclick=()=>{ if(confirm('清空全部笔迹？')){ strokes=[]; history=[]; renderAll(); updateStatus(); }};
+document.getElementById('export').onclick=()=>{
+  renderAll();
+  const dl=cv.toDataURL('image/png');
+  const a=document.createElement('a'); a.href=dl; a.download='hydro_notes.png'; a.click();
+};
+size.addEventListener('input',()=>{ if(size.value>=12) document.querySelector('[data-mode=highlighter]')&&colorInput.value; });
+colorInput.addEventListener('input',()=>{ if(cur) cur.color=colorInput.value; });
+function updateStatus(){ document.getElementById('status').textContent=`笔迹: ${strokes.length}`; }
+
+renderAll();
+</script>
+</body>
+</html>
