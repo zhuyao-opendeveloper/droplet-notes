@@ -34,11 +34,14 @@ jobs:
           flutter build apk --release --target-platform android-arm64 --split-per-abi
           echo "flutter exit=$?"
           mkdir -p apkout
-          APK=$(find build/app/outputs -name 'app-arm64-v8a-release.apk' | head -1)
+          # 全目录搜：工程根本身叫 android/ 时，flutter 会在「平台目录」
+          # （android/android/app/build/outputs/flutter-apk）出包，而工具却去
+          # <root>/build/app/outputs 找 —— 两边对不上，硬编码路径必然扑空。
+          APK=$(find . -name '*.apk' -not -path './apkout/*' | head -1)
           echo "found: [$APK]"
           if [ -z "$APK" ]; then
-            echo "::error::APK not found under build/app/outputs"
-            find build -name '*.apk' || true
+            echo "::error::no apk produced"
+            find . -name '*.apk' || true
             exit 1
           fi
           cp "$APK" apkout/app-release.apk
