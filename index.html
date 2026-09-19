@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="description" content="水滴笔记 —— 手写笔记 Android App 的网页版，内置无需压感的「智能钢笔」，支持 AI 总结/提纲/问答。">
+  <title>水滴笔记 · Droplet Notes</title>
+  <link rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233B5BDB' d='M12 2.5c4.2 5.2 6.5 8.4 6.5 11.4A6.5 6.5 0 0 1 12 20.4a6.5 6.5 0 0 1-6.5-6.5C5.5 10.9 7.8 7.7 12 2.5z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+
+<body>
+  <!-- ============ 首页 ============ -->
+  <section id="view-home" class="view">
+    <header class="topbar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.5c4.2 5.2 6.5 8.4 6.5 11.4A6.5 6.5 0 0 1 12 20.4a6.5 6.5 0 0 1-6.5-6.5C5.5 10.9 7.8 7.7 12 2.5z" />
+        </svg>
+        <span>水滴笔记</span>
+      </div>
+      <label class="search">
+        <i data-icon="search"></i>
+        <input id="home-search" type="search" placeholder="搜索标题或正文…" autocomplete="off">
+      </label>
+      <span class="spacer"></span>
+      <span id="home-count" class="count">0 篇</span>
+      <button id="home-view" class="icon-btn" title="网格 / 列表">
+        <i data-icon="grid"></i>
+      </button>
+      <button id="home-settings" class="icon-btn" title="设置">
+        <i data-icon="settings"></i>
+      </button>
+    </header>
+
+    <div class="chips" id="home-folders"></div>
+    <div class="chips subtle" id="home-filters"></div>
+
+    <main id="home-grid" class="note-grid"></main>
+    <button id="home-new" class="fab" title="新建笔记">
+      <i data-icon="add"></i>
+    </button>
+  </section>
+
+  <!-- ============ 编辑器 ============ -->
+  <section id="view-editor" class="view hidden">
+    <header class="topbar ed">
+      <button id="ed-back" class="icon-btn" title="回到首页">
+        <i data-icon="chevron_left"></i>
+      </button>
+      <input id="ed-title" class="title-input" placeholder="未命名笔记">
+      <span class="spacer"></span>
+      <button id="ed-star" class="icon-btn" title="收藏">
+        <i data-icon="star"></i>
+      </button>
+      <button id="ed-undo" class="icon-btn" title="撤销 (Ctrl+Z)">
+        <i data-icon="undo"></i>
+      </button>
+      <button id="ed-redo" class="icon-btn" title="重做 (Ctrl+Shift+Z)">
+        <i data-icon="redo"></i>
+      </button>
+      <span class="pages">
+        <button id="ed-prev" class="icon-btn sm" title="上一页">
+          <i data-icon="chevron_left"></i>
+        </button>
+        <span id="ed-pageinfo">1 / 1</span>
+        <button id="ed-next" class="icon-btn sm" title="下一页">
+          <i data-icon="chevron_right"></i>
+        </button>
+        <button id="ed-addpage" class="icon-btn sm" title="新增页">
+          <i data-icon="page_add"></i>
+        </button>
+        <button id="ed-duppage" class="icon-btn sm" title="复制本页">
+          <i data-icon="copy"></i>
+        </button>
+        <button id="ed-delpage" class="icon-btn sm" title="删除本页">
+          <i data-icon="delete"></i>
+        </button>
+      </span>
+      <button id="ed-layers" class="icon-btn" title="图层">
+        <i data-icon="layer"></i>
+      </button>
+      <button id="ed-fit" class="icon-btn" title="适应窗口">
+        <i data-icon="grid"></i>
+      </button>
+      <button id="ed-export" class="icon-btn" title="导出本页 PNG">
+        <i data-icon="download"></i>
+      </button>
+      <button id="ed-ai" class="btn ai-btn" title="AI 助手">
+        <i data-icon="sparkle"></i><span>AI</span>
+      </button>
+    </header>
+
+    <div class="ed-body">
+      <nav id="ed-rail" class="rail"></nav>
+      <div id="ed-wrap" class="canvas-wrap">
+        <canvas id="ed-canvas"></canvas>
+      </div>
+      <aside id="ed-panel" class="panel"></aside>
+    </div>
+  </section>
+
+  <script src="js/icons.js"></script>
+  <script src="js/zmath.js"></script>
+  <script src="js/recognizer.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/home.js"></script>
+  <script src="js/editor.js"></script>
+</body>
+
+</html>
