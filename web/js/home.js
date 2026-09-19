@@ -361,6 +361,10 @@
         '<button class="btn" id="bk-import">从备份恢复</button>' +
         '<button class="btn" id="bk-file-import">导入 .md / .txt 为笔记</button>' +
         '</div><input type="file" id="bk-file" accept=".json,.md,.txt" hidden></div>' +
+        '<hr><div class="field"><span>开源</span><div class="row-btns">' +
+        '<button class="btn" id="st-repo">仓库地址 · 给个 Star ⭐</button>' +
+        '</div><p class="hint">Hydro Note 完全开源（MIT）：免费、无广告、不联网、不收集任何数据。' +
+        '如果它对你有用，欢迎到仓库点个 Star —— 这是它继续更新下去的唯一动力。</p></div>' +
         '</div>',
       actions: [{ label: '取消', value: null }, { label: '保存', value: 1, primary: true }],
       onOpen: function (root) {
@@ -372,6 +376,7 @@
         DN.qs('#st-grid', root).addEventListener('input', function () {
           DN.qs('#st-grid-v', root).textContent = this.value + 'px';
         });
+        DN.qs('#st-repo', root).addEventListener('click', repoDialog);
         DN.qs('#bk-export', root).addEventListener('click', function () {
           var blob = new Blob([Store.exportAll()], { type: 'application/json' });
           var a = document.createElement('a');
@@ -448,6 +453,57 @@
     });
   }
 
+  /** 开源仓库地址：首页 ⭐ 与设置页「开源」共用，改地址只需改这一处。 */
+  var REPO_URL = 'https://github.com/zhuyao-opendeveloper/droplet-notes';
+
+  /** 复制文本：navigator.clipboard 在 file:// 下常被拒，退回 execCommand。 */
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function () { DN.toast('仓库地址已复制'); }, fallback);
+    } else {
+      fallback();
+    }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = t;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        DN.toast('仓库地址已复制');
+      } catch (e) {
+        DN.toast('复制失败，请手动选中地址');
+      }
+      ta.remove();
+    }
+  }
+
+  /**
+   * 开源仓库 + 求 Star。
+   *
+   * 本作免费、无广告、不联网、不收集任何数据；没有付费墙也没有遥测，
+   * 唯一能支持它继续更新下去的就是仓库的 Star。
+   */
+  function repoDialog() {
+    return DN.dialog({
+      title: 'Hydro Note 完全开源',
+      body:
+        '<p class="dlg-msg">免费、无广告、不联网、不收集任何数据。</p>' +
+        '<p class="dlg-msg">如果它对你有用，欢迎到仓库点个 Star —— 这是它继续更新下去的唯一动力。</p>' +
+        '<p class="repo-line">' + DN.esc(REPO_URL) + '</p>',
+      actions: [
+        { label: '知道了', value: null },
+        { label: '复制地址', value: 1 },
+        { label: '打开仓库', value: 2, primary: true }
+      ]
+    }).then(function (v) {
+      if (v === 1) copyText(REPO_URL);
+      if (v === 2) window.open(REPO_URL, '_blank', 'noopener');
+    });
+  }
+
   function bind() {
     var root = DN.qs('#view-home');
 
@@ -458,6 +514,8 @@
       var v = this.value;
       timer = setTimeout(function () { state.keyword = v; render(); }, 180);
     });
+
+    DN.qs('#home-star').addEventListener('click', repoDialog);
 
     root.addEventListener('click', function (e) {
       var t = e.target;

@@ -31,6 +31,19 @@
   ];
   var PENLIKE = { pen: 1, brush: 1, highlighter: 1, pencil: 1, rainbow: 1, vector: 1, smartPen: 1, tape: 1, laser: 1 };
   var SHAPES = { line: 1, rect: 1, ellipse: 1, triangle: 1, arrow: 1 };
+
+  // 工具盘分组：常驻 8 个 + 三个抽屉。手机上 19 颗按钮挤在一列太密，
+  // 直线/矩形/椭圆/三角/箭头合成「绘图工具」，铅笔/彩虹/矢量/胶带合成「更多笔」。
+  var MAIN_TOOLS = ['pen', 'brush', 'highlighter', 'smartPen', 'eraser', 'laser', 'lasso', 'text'];
+  var SHAPE_TOOLS = ['line', 'rect', 'ellipse', 'triangle', 'arrow'];
+  var EXTRA_TOOLS = ['pencil', 'rainbow', 'vector', 'tape'];
+  var MORE_TOOLS = ['image', 'crop'];
+  var GROUPS = [
+    { id: 'shape', name: '绘图工具', icon: 'grid', list: SHAPE_TOOLS },
+    { id: 'penx', name: '更多笔', icon: 'rainbow', list: EXTRA_TOOLS },
+    { id: 'more', name: '更多', icon: 'more', list: MORE_TOOLS }
+  ];
+  var HOLD_MS = 520; // 长按吸附：笔尖停留这么久才识别
   var PALETTE = Store.PALETTE;
 
   var S = {
@@ -47,6 +60,7 @@
     dirty: true,
     panel: 'prop',      // prop | ai | layers
     drawing: null,      // 正在写的笔画
+    snap: null,         // 长按识别出的规整形状（非 curve 时预览用它画）
     preview: null,      // 形状 / 套索预览
     laser: null,
     aiBusy: false,
@@ -104,7 +118,23 @@
     ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.setTransform(dpr * S.scale, 0, 0, dpr * S.scale, dpr * S.tx, dpr * S.ty);
     Render.drawPage(ctx, p, p.width, p.height, Store.settings().dark);
-    if (S.drawing) Render.drawStroke(ctx, S.drawing);
+    if (S.drawing) {
+      if (S.snap && S.snap.kind !== 'curve') {
+        // 吸附态：预览直接画规整几何，让用户看清「松手会变成什么」
+        Render.drawShape(ctx, {
+          type: S.snap.kind, pts: S.snap.pts, color: S.drawing.color,
+          size: S.drawing.size, opacity: 1, fill: S.fill
+        });
+      } else if (S.snap) {
+        // curve 只是把粗糙手绘平滑了，仍按原笔型画（保留笔锋）
+        Render.drawStroke(ctx, {
+          type: S.drawing.type, pts: S.snap.pts, color: S.drawing.color,
+          size: S.drawing.size, opacity: S.drawing.opacity
+        });
+      } else {
+        Render.drawStroke(ctx, S.drawing);
+      }
+    }
     if (S.preview) drawPreview(ctx);
     if (S.laser) Render.drawLaser(ctx, S.laser);
     if (S.sel && S.sel.list.length) drawSelection(ctx);
@@ -204,11 +234,84 @@
   }
 
   // ---------- 工具栏 / 面板 ----------
+  function toolMeta(id) {
+    for (var i = 0; i < TOOLS.length; i++) if (TOOLS[i][0] === id) return TOOLS[i];
+    return [id, id, id];
+  }
+
+  function railBtnHtml(id) {
+    var t = toolMeta(id);
+    return '<button class="rail-btn' + (S.tool === id ? ' sel' : '') + '" data-tool="' + id +
+      '" title="' + DN.esc(t[2]) + '">' + DN.icon(t[1], 22) + '</button>';
+  }
+
+  /** 抽屉按钮：当前选中该组内某个工具时，直接显示那个工具的图标 ——
+   *  不用打开抽屉也能看出正在用哪个。 */
+  function groupBtnHtml(g) {
+    var cur = g.list.indexOf(S.tool) >= 0 ? toolMeta(S.tool) : null;
+    return '<button class="rail-btn grp' + (cur ? ' sel' : '') + '" data-group="' + g.id +
+      '" title="' + DN.esc(g.name) + '">' + DN.icon(cur ? cur[1] : g.icon, 22) +
+      '<em class="dot"></em></button>';
+  }
+
   function railHtml() {
-    return TOOLS.map(function (t) {
-      return '<button class="rail-btn' + (S.tool === t[0] ? ' sel' : '') + '" data-tool="' + t[0] +
-        '" title="' + DN.esc(t[2]) + '">' + DN.icon(t[1], 22) + '</button>';
-    }).join('');
+    var html = MAIN_TOOLS.map(railBtnHtml).join('');
+    for (var i = 0; i < GROUPS.length; i++) html += groupBtnHtml(GROUPS[i]);
+    return html;
+  }
+
+  function syncRail() {
+    var r = DN.qs('#ed-rail');
+    if (r) r.innerHTML = railHtml();
+    ICONS.paint(r || document);
+  }
+
+  /** 抽屉弹出层：点 rail 上的分组按钮，在它右侧展开工具列表。 */
+  function openToolPop(g, anchorBtn) {
+    closeToolPop();
+    var pop = document.createElement('div');
+    pop.className = 'tool-pop';
+    pop.id = 'tool-pop';
+    pop.innerHTML = '<div class="pop-title">' + DN.esc(g.name) + '</div>' +
+      g.list.map(function (id) {
+        var t = toolMeta(id);
+        return '<button class="pop-item' + (S.tool === id ? ' sel' : '') + '" data-tool="' + id + '">' +
+          DN.icon(t[1], 20) + '<span>' + DN.esc(t[2]) + '</span></button>';
+      }).join('');
+    document.body.appendChild(pop);
+    var r = anchorBtn.getBoundingClientRect();
+    pop.style.left = (r.right + 8) + 'px';
+    // 弹出层比视口高时往上顶，别把最后一项挤到屏幕外
+    var top = Math.min(r.top, Math.max(8, window.innerHeight - pop.offsetHeight - 12));
+    pop.style.top = top + 'px';
+    ICONS.paint(pop);
+    pop.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-tool]');
+      if (!b) return;
+      S.tool = b.dataset.tool;
+      S.sel = null;
+      closeToolPop();
+      syncRail();
+      syncPanel();
+      S.dirty = true;
+    });
+    // 点别处 / 滚动 / 缩放都关掉，避免浮层跟着页面跑
+    setTimeout(function () {
+      document.addEventListener('pointerdown', outsideClose);
+      window.addEventListener('resize', closeToolPop);
+    }, 0);
+  }
+
+  function outsideClose(e) {
+    if (e.target.closest('#tool-pop') || e.target.closest('[data-group]')) return;
+    closeToolPop();
+  }
+
+  function closeToolPop() {
+    var p = DN.qs('#tool-pop');
+    if (p) p.remove();
+    document.removeEventListener('pointerdown', outsideClose);
+    window.removeEventListener('resize', closeToolPop);
   }
 
   function propHtml() {
@@ -242,7 +345,7 @@
       case 'eraser': return '橡皮：整笔擦除，点到哪笔画就整笔删除。';
       case 'lasso': return '套索：框选一组笔画后可以整体拖动，或按 Delete 删除。';
       case 'image': return '插入图片：点击后选图，插入后可用「图片裁剪」调整。';
-      default: return '写完一笔会做「手绘图形自动识别」，画得像直线/矩形/圆/三角/箭头时会自动变规整。';
+      default: return '画完一笔**不提笔、停留约 0.5 秒**才识别（抬笔不会自动识别，免得随手写的字也被拉成形状）。只认直线、圆、曲线三种：识别出来后手指继续拖可以改，抬笔才最终吸附；判不成直线或圆的，会把抖动的手绘整合成光滑曲线。';
     }
   }
 
@@ -394,8 +497,53 @@
   }
 
   // ---------- 指针输入 ----------
+  // ---------- 手绘图形识别：长按触发 + 可拖动修改 + 抬笔吸附 ----------
+  //
+  // 旧的写法是「抬笔就识别一次」，于是随手写个字也会被拉成某个形状 ——
+  // 识别错了比不识别更烦人。现在唯一的触发路径是：画完**不提笔**停留
+  // HOLD_MS 毫秒；触发之后手指还能继续拖着改（下面 onMove 里持续重识别），
+  // **抬笔才最终吸附**。识别器只输出 直线 / 圆 / 曲线 三类。
+
+  var holdTimer = null;
+  var snapLastAt = null, snapLastTime = 0;
+
+  function recogOn() {
+    return !!Store.settings().autoShape;
+  }
+
+  function tryRecognize(flat) {
+    if (!recogOn()) return null;
+    if (flat.length / 3 < 8) return null;
+    return global.Recognizer.beautifySimple(flat, Store.settings().shapeTolerance);
+  }
+
+  /** 每次采样都重新计时 ⇒ 只有停下手（不提笔）HOLD_MS 才会真的触发。 */
+  function scheduleHoldSnap() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    if (!recogOn() || S.snap) return;
+    holdTimer = setTimeout(function () {
+      holdTimer = null;
+      if (!S.drawing) return;
+      var r = tryRecognize(S.drawing.pts);
+      if (!r) return;
+      snapLastAt = null;
+      snapLastTime = Date.now();
+      S.snap = r;
+      S.dirty = true;
+    }, HOLD_MS);
+  }
+
+  function clearSnap() {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+    S.snap = null;
+    snapLastAt = null;
+  }
+
   function onDown(ev) {
     if (!S.note) return;
+    clearSnap();
     cv.setPointerCapture(ev.pointerId);
     var pt = toPage(ev.clientX, ev.clientY);
     var press = ev.pressure && ev.pressure > 0 && ev.pointerType === 'pen' ? ev.pressure : null;
@@ -436,6 +584,8 @@
     S.dirty = true;
   }
 
+  // 注意：长按计时由 onMove 持续推迟，落笔后不动满 HOLD_MS 同样会触发
+
   function onMove(ev) {
     if (!S.note) return;
     var pt = toPage(ev.clientX, ev.clientY);
@@ -464,6 +614,20 @@
     if (n >= 3 && Math.hypot(pt.x - d[n - 3], pt.y - d[n - 2]) < 1.6) return;
     var press = ev.pressure && ev.pressure > 0 && ev.pointerType === 'pen' ? ev.pressure : 0;
     d.push(pt.x, pt.y, press || 0);
+    if (S.snap) {
+      // 吸附态下继续拖 = **调整形状**：把新点并进笔画再识别一次，形状跟着手指走。
+      // 节流：距离 >10px 且距上次 >60ms 才重算，否则每帧全量识别会拖垮帧率。
+      var now = Date.now();
+      if ((!snapLastAt || Math.hypot(pt.x - snapLastAt.x, pt.y - snapLastAt.y) > 10) &&
+        now - snapLastTime > 60) {
+        var r = tryRecognize(d);
+        if (r) S.snap = r;
+        snapLastAt = { x: pt.x, y: pt.y };
+        snapLastTime = now;
+      }
+    } else {
+      scheduleHoldSnap();
+    }
     S.dirty = true;
   }
 
@@ -535,18 +699,21 @@
     }
     if (n < 2 && st.pts.length >= 3) st.pts.push(st.pts[0] + 0.6, st.pts[1], st.pts[2] || 0);
 
+    // 只用长按产生的吸附结果 —— 抬笔不再兜底识别（见上面「长按触发」的说明）
+    var snap = S.snap;
+    clearSnap();
     var recognized = null;
-    if (Store.settings().autoShape && (S.tool === 'pen' || S.tool === 'pencil' || S.tool === 'brush')) {
-      var raw = [];
-      for (var i = 0; i + 2 < st.pts.length; i += 3) raw.push([st.pts[i], st.pts[i + 1]]);
-      var r = global.Recognizer.recognize(raw, Store.settings().shapeTolerance);
-      if (r.kind !== 'curve') {
-        var rp = global.Recognizer.toShapePoints(r.kind, r.data, Render.toPoints(st.pts));
-        recognized = { id: st.id, type: r.kind, pts: rp, color: st.color, size: st.size, opacity: st.opacity, fill: S.fill };
-      }
+    if (snap && snap.kind !== 'curve') {
+      recognized = {
+        id: st.id, type: snap.kind, pts: snap.pts,
+        color: st.color, size: st.size, opacity: st.opacity, fill: S.fill
+      };
+    } else if (snap) {
+      // curve = 只是把粗糙手绘平滑了：笔型不变，只换掉点
+      st.pts = snap.pts;
     }
     p.strokes.push(recognized || st);
-    if (recognized) DN.toast('识别成' + ({ line: '直线', rect: '矩形', ellipse: '椭圆', triangle: '三角形', arrow: '箭头' })[recognized.type]);
+    if (recognized) DN.toast('识别成' + ({ line: '直线', ellipse: '圆' })[recognized.type]);
     save();
     S.dirty = true;
     if (S.panel === 'layers') syncPanel();
@@ -835,6 +1002,13 @@
 
     DN.qs('#ed-rail').innerHTML = railHtml();
     DN.qs('#ed-rail').addEventListener('click', function (e) {
+      var g = e.target.closest('[data-group]');
+      if (g) {
+        for (var i = 0; i < GROUPS.length; i++) {
+          if (GROUPS[i].id === g.dataset.group) return openToolPop(GROUPS[i], g);
+        }
+        return;
+      }
       var b = e.target.closest('[data-tool]');
       if (!b) return;
       S.tool = b.dataset.tool;
@@ -910,7 +1084,8 @@
       var kmap = { 1: 'pen', 2: 'brush', 3: 'highlighter', 4: 'smartPen', 5: 'pencil', r: 'rect', e: 'ellipse', l: 'line', t: 'triangle', a: 'arrow' };
       if (kmap[e.key] && !e.ctrlKey && !e.metaKey) {
         S.tool = kmap[e.key];
-        DN.qsa('.rail-btn').forEach(function (x) { x.classList.toggle('sel', x.dataset.tool === S.tool); });
+        // 工具可能收在抽屉里，直接整条重绘比逐个改 class 稳
+        syncRail();
         syncPanel();
       }
     });
@@ -972,6 +1147,7 @@
   }
 
   function openNote(id, focusAi) {
+    clearSnap();
     var n = Store.note(id);
     if (!n) return;
     DN.go('editor');
@@ -995,6 +1171,7 @@
   global.Editor = {
     init: init,
     openNote: openNote,
+    syncRail: syncRail,
     hasNote: function () { return !!S.note; },
     applySettings: function () {
       var st = Store.settings();

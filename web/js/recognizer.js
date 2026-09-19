@@ -290,9 +290,213 @@
     }
   }
 
+  // ---------- 简化版识别：只认「直线 / 圆 / 曲线」三类 ----------
+  //
+  // 全量识别会把随手写的一个字也判成矩形/三角/箭头 —— 识别错了比不识别更烦人。
+  // 所以这里的策略是：
+  //  - rect / triangle / arrow 一律按「曲线平滑」处理，不再输出这三种形状；
+  //  - curve 也不再原样返回，而是**去噪 + 光滑**后的曲线：用户画得再抖，
+  //    落笔也是一条干净的曲线。
+  //
+  // 何时识别由编辑器决定（不提笔长按才触发，抬笔不兜底），这里只管识别本身。
+
+  var SNAP_LINE_DEG = 8; // 直线吸附角度容差（度）：够近就吸到 水平/垂直/45°
+
+  /** 把角度吸附到 step 的整数倍；离得太远就原样返回。 */
+  function snapAngle(ang, step, tol) {
+    var q = Math.round(ang / step) * step;
+    return Math.abs(ang - q) <= tol ? q : ang;
+  }
+
+  /** 扁平三元数组 [x,y,p,...] → [[x,y],...] */
+  function flatToXY(flat) {
+    var out = [];
+    for (var i = 0; i + 2 < flat.length; i += 3) out.push([flat[i], flat[i + 1]]);
+    return out;
+  }
+
+  /** 直线美化：够接近就吸附到 水平 / 垂直 / 45°。 */
+  function beautifyLine(pts) {
+    var a = pts[0], b = pts[pts.length - 1];
+    var ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+    // 直线没有方向，规范化到 [-90°, 90°) 再吸附，否则 ±180° 会算成两个角度
+    while (ang >= Math.PI / 2) ang -= Math.PI;
+    while (ang < -Math.PI / 2) ang += Math.PI;
+    var s = snapAngle(ang, Math.PI / 4, SNAP_LINE_DEG * Math.PI / 180);
+    if (s !== ang) {
+      var L = dist(a, b);
+      b = [a[0] + Math.cos(s) * L, a[1] + Math.sin(s) * L];
+    }
+    return { kind: 'line', pts: [a, b], score: 1 };
+  }
+
+  /** 椭圆美化：接近正圆时强制取正方形包围盒（用户要的是「圆」）。 */
+  function beautifyEllipse(pts) {
+    var hull = convexHull(pts);
+    if (hull.length < 3) return smoothCurveFromXY(pts);
+    var b = bbox(pts);
+    var w = b[2] - b[0], h = b[3] - b[1];
+    var ratio = h > 0 ? w / h : 99;
+    if (ratio > 1 / 1.1 && ratio < 1.1) { var t = (w + h) / 2; w = t; h = t; }
+    var cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    return { kind: 'ellipse', pts: [[cx - w / 2, cy - h / 2], [cx + w / 2, cy + h / 2]], score: 1 };
+  }
+
+  /** 统一规整成**正圆**：用户要的是「圆」，不是任意长短轴的椭圆。 */
+  function asCircle(e) {
+    var p = e.pts;
+    if (!p || p.length < 2) return e;
+    var cx = (p[0][0] + p[1][0]) / 2, cy = (p[0][1] + p[1][1]) / 2;
+    var r = (Math.abs(p[1][0] - p[0][0]) + Math.abs(p[1][1] - p[0][1])) / 4;
+    return { kind: 'ellipse', pts: [[cx - r, cy - r], [cx + r, cy + r]], score: 1 };
+  }
+
+  /**
+   * 粗糙手绘 → **光滑无噪点**的曲线。
+   *
+   * 三步，顺序不能换：
+   *  1) RDP 简化：先抽掉抖动产生的冗余点、**保留真正的拐点**。
+   *     跳过这步直接平滑，方角会被磨成圆角，形状整个走样。
+   *  2) Chaikin 切角：把折线磨成圆滑曲线。两次足够 —— 每次细分都会让
+   *     曲线向内收缩，做多了形状肉眼可见地缩水。
+   *  3) 三点加权移动平均：清掉 Chaikin 之后残留的高频噪点。
+   */
+  function smoothCurveFromXY(xy, press) {
+    if (xy.length < 4) return { kind: 'curve', pts: xy, score: 0 };
+    var b = bbox(xy);
+    var diag = Math.hypot(b[2] - b[0], b[3] - b[1]);
+    // 简化容差取对角线的 1.2%：太小挡不住抖动，太大把真拐点也删了
+    var eps = Math.max(1, Math.min(12, diag * 0.012));
+    var pts = rdp(xy, eps);
+    if (pts.length < 3) pts = xy;
+    pts = chaikin(pts);
+    pts = chaikin(pts);
+    pts = movingAvg(pts, 2);
+    if (!press) {
+      var flat0 = [];
+      for (var k = 0; k < pts.length; k++) flat0.push(pts[k][0], pts[k][1], 0);
+      return { kind: 'curve', pts: flat0, score: 0 };
+    }
+    return { kind: 'curve', pts: withPressure(pts, xy, press), score: 0 };
+  }
+
+  /** 入口版：直接吃书写笔画的扁平三元数组，压感自动从原始点取回。 */
+  function smoothCurve(flat) {
+    var xy = flatToXY(flat), ps = [], i;
+    for (i = 0; i + 2 < flat.length; i += 3) ps.push(flat[i + 2] || 0);
+    if (xy.length < 4) return { kind: 'curve', pts: flat, score: 0 };
+    return smoothCurveFromXY(xy, ps);
+  }
+
+  /** Ramer–Douglas–Peucker 简化（迭代版，避免长笔画递归爆栈）。 */
+  function rdp(pts, eps) {
+    if (pts.length < 3) return pts.slice();
+    var keep = [], i;
+    for (i = 0; i < pts.length; i++) keep.push(false);
+    keep[0] = true;
+    keep[pts.length - 1] = true;
+    var stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      var seg = stack.pop();
+      if (seg[1] - seg[0] < 2) continue;
+      var maxD = -1, idx = -1;
+      for (i = seg[0] + 1; i < seg[1]; i++) {
+        var d = perpDist(pts[i], pts[seg[0]], pts[seg[1]]);
+        if (d > maxD) { maxD = d; idx = i; }
+      }
+      if (maxD > eps && idx > 0) {
+        keep[idx] = true;
+        stack.push([seg[0], idx]);
+        stack.push([idx, seg[1]]);
+      }
+    }
+    var out = [];
+    for (i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]);
+    return out;
+  }
+
+  function perpDist(p, a, b) {
+    var dx = b[0] - a[0], dy = b[1] - a[1];
+    var l2 = dx * dx + dy * dy;
+    if (l2 <= 0) return dist(p, a);
+    var t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+
+  /** Chaikin 切角：每段按 1:3 / 3:1 取两点，折线 → 圆滑曲线。 */
+  function chaikin(pts) {
+    if (pts.length < 3) return pts.slice();
+    var out = [pts[0]];
+    for (var i = 0; i < pts.length - 1; i++) {
+      var a = pts[i], b = pts[i + 1];
+      out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+      out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
+  /** 1-2-1 加权移动平均，首尾点保持不动以留住起笔收笔位置。 */
+  function movingAvg(pts, times) {
+    var cur = pts, t, i;
+    for (t = 0; t < times; t++) {
+      if (cur.length < 3) return cur;
+      var out = [cur[0]];
+      for (i = 1; i < cur.length - 1; i++) {
+        out.push([
+          (cur[i - 1][0] + cur[i][0] * 2 + cur[i + 1][0]) / 4,
+          (cur[i - 1][1] + cur[i][1] * 2 + cur[i + 1][1]) / 4
+        ]);
+      }
+      out.push(cur[cur.length - 1]);
+      cur = out;
+    }
+    return cur;
+  }
+
+  /** 平滑后只剩坐标，压感要从原始点里按最近邻取回 ——
+   *  否则整条曲线变成恒定 0，笔锋全丢。 */
+  function withPressure(pts, raw, press) {
+    var out = [], k, i;
+    for (k = 0; k < pts.length; k++) {
+      var best = 0, bd = Infinity;
+      for (i = 0; i < raw.length; i++) {
+        var dx = raw[i][0] - pts[k][0], dy = raw[i][1] - pts[k][1];
+        var d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = i; }
+      }
+      out.push(pts[k][0], pts[k][1], press[best] || 0);
+    }
+    return out;
+  }
+
+  /**
+   * 只认三类的识别入口。
+   * @param {number[]} flat 书写笔画的扁平三元数组 [x,y,p,...]
+   * @param {number} tolerance 0=严格 0.5=标准 1.0=宽松
+   * @returns {{kind:string, pts:*, score:number}}
+   *   kind: line | ellipse | curve
+   *   pts:  line/ellipse → [[x,y],...] 控制点；curve → 扁平三元（带压感）
+   */
+  function beautifySimple(flat, tolerance) {
+    var xy = flatToXY(flat);
+    if (xy.length < 4) return { kind: 'curve', pts: flat, score: 0 };
+    var r = recognize(xy, tolerance);
+    var rs = resample(xy, 48);
+    if (r.kind === 'line') return beautifyLine(rs);
+    if (r.kind === 'ellipse') return asCircle(beautifyEllipse(rs));
+    // rect / triangle / arrow / curve 全部走曲线平滑
+    return smoothCurve(flat);
+  }
+
   var API = {
     recognize: recognize,
+    beautifySimple: beautifySimple,
+    smoothCurve: smoothCurve,
     toShapePoints: toShapePoints,
+    rdp: rdp,
+    chaikin: chaikin,
     resample: resample,
     convexHull: convexHull,
     minAreaRect: minAreaRect,
