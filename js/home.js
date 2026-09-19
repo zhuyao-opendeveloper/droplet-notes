@@ -376,7 +376,7 @@
           var blob = new Blob([Store.exportAll()], { type: 'application/json' });
           var a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = '水滴笔记-备份-' + new Date().toISOString().slice(0, 10) + '.json';
+          a.download = 'HydroNote-备份-' + new Date().toISOString().slice(0, 10) + '.json';
           a.click();
           DN.toast('已导出备份');
         });

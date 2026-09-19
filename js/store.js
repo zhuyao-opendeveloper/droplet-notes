@@ -306,7 +306,7 @@
       model: 'gpt-4o-mini',
       apiKey: '',
       temperature: 0.5,
-      systemPrompt: '你是水滴笔记里的写作助手。回答用中文，简洁、准确，直接给结果，不要寒暄。'
+      systemPrompt: '你是 Hydro Note 里的写作助手。回答用中文，简洁、准确，直接给结果，不要寒暄。'
     });
   }
   function saveAI(c) { return write(K.ai, c); }
