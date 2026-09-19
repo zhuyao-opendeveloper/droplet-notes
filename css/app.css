@@ -520,6 +520,83 @@ input[type=range] {
   color: var(--brand);
 }
 
+/* 分组抽屉按钮：右下角一个小圆点，提示「点开还有更多」 */
+.rail-btn.grp {
+  position: relative;
+}
+
+.rail-btn.grp .dot {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.rail-btn.grp.sel .dot {
+  background: var(--brand);
+}
+
+/* 工具抽屉浮层：用 fixed 脱离 rail 布局，否则会被父容器的 overflow 裁掉 */
+.tool-pop {
+  position: fixed;
+  z-index: 60;
+  min-width: 148px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+
+.tool-pop .pop-title {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.tool-pop .pop-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tool-pop .pop-item svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+.tool-pop .pop-item:hover {
+  background: var(--surface-2);
+}
+
+.tool-pop .pop-item.sel {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+
+.repo-line {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+}
+
 .canvas-wrap {
   flex: 1;
   position: relative;
