@@ -137,19 +137,19 @@ class ZMath {
   }
 
   /// 把一笔 Stroke 转成**可填充**路径：沿中心线盖一串圆点的并集。
-  static Path buildPath(Stroke stroke) {
-    if (stroke.points.isEmpty) return Path();
+  static ui.Path buildPath(Stroke stroke) {
+    if (stroke.points.isEmpty) return ui.Path();
     final p = _profile(stroke);
-    final path = Path();
+    final path = ui.Path();
     _addDots(path, p);
     return path;
   }
 
   /// 沿中心线按弧长步进盖圆点。首尾各强制放一个（保证端头是圆的）。
-  static void _addDots(Path path, _Profile p) {
+  static void _addDots(ui.Path path, _Profile p) {
     final n = p.x.length;
     if (n == 1) {
-      path.addOval(Rect.fromCircle(
+      path.addOval(ui.Rect.fromCircle(
           center: ui.Offset(p.x[0], p.y[0]), radius: p.r[0]));
       return;
     }
@@ -164,7 +164,7 @@ class ZMath {
     final est = total / spacing;
     if (est > maxDots) spacing = total / maxDots;
 
-    path.addOval(Rect.fromCircle(
+    path.addOval(ui.Rect.fromCircle(
         center: ui.Offset(p.x[0], p.y[0]), radius: p.r[0]));
     var acc = 0.0;
     for (var i = 1; i < n; i++) {
@@ -173,11 +173,11 @@ class ZMath {
       acc += math.sqrt(dx * dx + dy * dy);
       if (acc >= spacing) {
         acc = 0.0;
-        path.addOval(Rect.fromCircle(
+        path.addOval(ui.Rect.fromCircle(
             center: ui.Offset(p.x[i], p.y[i]), radius: p.r[i]));
       }
     }
-    path.addOval(Rect.fromCircle(
+    path.addOval(ui.Rect.fromCircle(
         center: ui.Offset(p.x[n - 1], p.y[n - 1]), radius: p.r[n - 1]));
   }
 
